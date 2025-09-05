@@ -1,11 +1,373 @@
 <!DOCTYPE html>
 <html lang="en">
     <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>About Me</title>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width,initial-scale=1" />
+        <title>Web Console Component</title>
+        <style>
+            :root {
+                --bg: #0b0f14;
+                --fg: #d6e6f3;
+                --accent: #47cbff;
+            }
+            * {
+                box-sizing: border-box;
+            }
+            body {
+                margin: 0;
+                font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace;
+                background: var(--bg);
+                color: var(--fg);
+                height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            .console-wrap {
+                width: 100%;
+                height: 100vh;
+                background: var(--bg);
+                padding: 0;
+                display: flex;
+                flex-direction: column;
+                box-shadow: 0 8px 30px rgba(0, 0, 0, 0.6);
+            }
+            .console {
+                flex: 1;
+                overflow: auto;
+                padding: 0;
+                border-radius: 6px;
+                background: transparent;
+                outline: none;
+                white-space: pre-wrap;
+            }
+            .line {
+                display: block;
+            }
+            .cursor {
+                background: var(--fg);
+                color: var(--bg);
+                animation: blink 1s steps(1) infinite;
+            }
+            @keyframes blink {
+                50% {
+                    background: transparent;
+                    color: var(--fg);
+                }
+            }
+            .clickable {
+                color: var(--accent);
+                text-decoration: none;
+                cursor: pointer;
+            }
+            .clickable:hover,
+            .clickable[data-parent]:hover ~ .clickable[data-parent] {
+                text-decoration: underline;
+            }
+
+            .clickable[data-parent]:hover,
+            .clickable[data-parent]:hover ~ .clickable[data-parent] {
+                text-decoration: underline;
+            }
+        </style>
     </head>
     <body>
-        <h1>Alex Cherry</h1>
+        <div class="console-wrap" id="consoleWrap">
+            <div id="console" class="console" tabindex="0" aria-live="polite"></div>
+        </div>
+
+        <script>
+            (function () {
+                const consoleEl = document.getElementById("console");
+                let lastCols, lastRows;
+
+                function getTerminalSize() {
+                    const span = document.createElement("span");
+                    span.textContent = "M"; // monospaced character
+                    span.style.visibility = "hidden";
+                    span.style.position = "absolute";
+                    consoleEl.appendChild(span);
+                    const charWidth = span.offsetWidth;
+                    const charHeight = span.offsetHeight;
+                    consoleEl.removeChild(span);
+
+                    const cols = Math.floor(consoleEl.clientWidth / charWidth);
+                    const rows = Math.floor(consoleEl.clientHeight / charHeight);
+                    return { cols, rows };
+                }
+
+                function checkSize() {
+                    const { cols, rows } = getTerminalSize();
+                    if (lastCols !== undefined && lastRows !== undefined) {
+                        if (cols !== lastCols || rows !== lastRows) {
+                            location.reload();
+                        }
+                    }
+                    lastCols = cols;
+                    lastRows = rows;
+                }
+
+                window.addEventListener("resize", checkSize);
+                checkSize();
+
+                let lines = [[]];
+                let cursor = { line: 0, ch: 0 };
+                let cursorVisible = true;
+
+                function render() {
+                    consoleEl.innerHTML = "";
+                    lines.forEach((segments, lineIndex) => {
+                        const lineEl = document.createElement("div");
+                        let cursorPlaced = false;
+
+                        segments.forEach((seg, chIndex) => {
+                            let span;
+                            if (seg.type === "text") {
+                                span = document.createElement("span");
+                                span.textContent = seg.value;
+                                if (seg.bold) {
+                                    span.style.fontWeight = "bold";
+                                }
+                            } else if (seg.type === "clickable") {
+                                span = document.createElement("a");
+                                span.textContent = seg.value;
+                                span.href = seg.href;
+                                span.dataset.parent = seg.parentId;
+                                span.className = "clickable";
+
+                                span.addEventListener("mouseenter", () => {
+                                    document.querySelectorAll(`[data-parent="${seg.parentId}"]`).forEach((el) => {
+                                        el.style.textDecoration = "underline";
+                                    });
+                                });
+                                span.addEventListener("mouseleave", () => {
+                                    document.querySelectorAll(`[data-parent="${seg.parentId}"]`).forEach((el) => {
+                                        el.style.textDecoration = "none";
+                                    });
+                                });
+                            }
+
+                            if (lineIndex === cursor.line && chIndex === cursor.ch && cursorVisible) {
+                                span.classList.add("cursor");
+                                cursorPlaced = true;
+                            }
+                            lineEl.appendChild(span);
+                        });
+
+                        if (lineIndex === cursor.line && !cursorPlaced && cursorVisible) {
+                            const cursorSpan = document.createElement("span");
+                            cursorSpan.textContent = " ";
+                            cursorSpan.className = "cursor";
+                            lineEl.appendChild(cursorSpan);
+                        }
+
+                        consoleEl.appendChild(lineEl);
+                    });
+                }
+
+                function ensureLine(lineIndex) {
+                    while (lines.length <= lineIndex) {
+                        lines.push([]);
+                    }
+                }
+
+                let clickableCounter = 0;
+                const WebConsole = {
+                    clear() {
+                        lines = [[]];
+                        cursor = { line: 0, ch: 0 };
+                        render();
+                        return this;
+                    },
+                    getWidth() {
+                        return getTerminalSize().cols;
+                    },
+                    getHeight() {
+                        return getTerminalSize().rows;
+                    },
+                    print(text, bold = false) {
+                        const parts = text.split("\n");
+                        parts.forEach((part, i) => {
+                            ensureLine(cursor.line);
+                            if (!lines[cursor.line]) lines[cursor.line] = [];
+                            if (part.length > 0) {
+                                for (const ch of part) {
+                                    lines[cursor.line].splice(cursor.ch, 0, {
+                                        type: "text",
+                                        value: ch,
+                                        bold: bold,
+                                    });
+                                    cursor.ch++;
+                                }
+                            }
+
+                            if (i < parts.length - 1) {
+                                cursor.line++;
+                                cursor.ch = 0;
+                                ensureLine(cursor.line);
+                            }
+                        });
+                        render();
+                        return this;
+                    },
+                    moveCursor(line, ch) {
+                        ensureLine(line);
+                        cursor.line = line;
+
+                        const lineArr = lines[line];
+                        while (lineArr.length < ch) {
+                            lineArr.push({ type: "text", value: " " });
+                        }
+
+                        cursor.ch = ch;
+                        render();
+                        return this;
+                    },
+                    addClickable(text, param, bold = false) {
+                        const leadingSpaces = text.match(/^\s*/)[0];
+                        const trailingSpaces = text.match(/\s*$/)[0];
+                        const trimmedText = text.trim();
+
+                        if (leadingSpaces) this.print(leadingSpaces, bold);
+
+                        ensureLine(cursor.line);
+                        const url = new URL(window.location.href);
+                        if (typeof param === "string") {
+                            url.search += (url.search ? "&" : "?") + param;
+                        } else if (typeof param === "object") {
+                            Object.keys(param).forEach((key) => url.searchParams.set(key, param[key]));
+                        }
+
+                        const parentId = "clickable-" + clickableCounter++;
+                        for (let ch of trimmedText) {
+                            lines[cursor.line].splice(cursor.ch, 0, { type: "clickable", value: ch, href: url.toString(), parentId });
+                            cursor.ch++;
+                        }
+
+                        if (trailingSpaces) this.print(trailingSpaces, bold);
+
+                        render();
+                        return this;
+                    },
+                    focus() {
+                        consoleEl.focus();
+                        return this;
+                    },
+                    getLines() {
+                        return lines;
+                    },
+                    line(x1, y1, x2, y2) {
+                        const isVertical = x1 === x2;
+                        const isHorizontal = y1 === y2;
+
+                        if (!isVertical && !isHorizontal) {
+                            console.warn("Only straight horizontal or vertical lines are supported.");
+                            return this;
+                        }
+
+                        const startLine = Math.min(y1, y2);
+                        const endLine = Math.max(y1, y2);
+                        const startCh = Math.min(x1, x2);
+                        const endCh = Math.max(x1, x2);
+
+                        if (isVertical) {
+                            for (let i = startLine; i <= endLine; i++) {
+                                ensureLine(i);
+                                const lineArr = lines[i];
+                                while (lineArr.length <= x1) {
+                                    lineArr.push({ type: "text", value: " " });
+                                }
+                                lineArr[x1] = { type: "text", value: "|" };
+                            }
+                        } else if (isHorizontal) {
+                            ensureLine(y1);
+                            const lineArr = lines[y1];
+                            while (lineArr.length <= endCh) {
+                                lineArr.push({ type: "text", value: " " });
+                            }
+                            for (let i = startCh; i <= endCh; i++) {
+                                lineArr[i] = { type: "text", value: "-" };
+                            }
+                        }
+
+                        render();
+                        return this;
+                    },
+                };
+
+                function printMultilineAt(text, startLine, startCh, webconsole) {
+                    const lines = text
+                        .trim()
+                        .split("\n")
+                        .map((line) => line.trim());
+
+                    lines.forEach((lineText, index) => {
+                        webconsole.moveCursor(startLine + index, startCh);
+
+                        let isBoldLine = lineText.startsWith("#");
+                        let i = 0;
+                        let inStars = false;
+
+                        while (i < lineText.length) {
+                            if (lineText[i] === "*" && lineText[i + 1] === "*") {
+                                webconsole.print("**", true);
+                                inStars = !inStars;
+                                i += 2;
+                                continue;
+                            }
+
+                            webconsole.print(lineText[i], isBoldLine || inStars);
+                            i++;
+                        }
+                    });
+                }
+
+                const pages = [
+                    `
+                    This is a test
+                    `,
+                    `
+                    This is a second test
+                    `,
+                ];
+
+                const params = new URLSearchParams(window.location.search);
+                const pageNum = parseInt(params.get("page") ?? "0", 10);
+                const themeColor = parseInt(params.get("themeColor") ?? "0", 10);
+
+                let fileText;
+                if (pageNum < 0 || pageNum > pages.length - 1) {
+                    fileText = `
+                    **404** What are you
+                    exactly trying to find?
+                    `;
+                } else {
+                    fileText = pages[pageNum];
+                }
+
+                if (themeColor === 1) {
+                    document.documentElement.style.setProperty("--fg", "lime");
+                    document.documentElement.style.setProperty("--accent", "#00c500");
+                } else if (themeColor === 2) {
+                    document.documentElement.style.setProperty("--bg", "white");
+                    document.documentElement.style.setProperty("--fg", "black");
+                    document.documentElement.style.setProperty("--accent", "blue");
+                }
+
+                window.WebConsole = WebConsole;
+
+                WebConsole.print("\n portfolio/\n")
+                    .print("   templates/\n")
+                    .addClickable("     index.md\n", { page: 0 })
+                    .addClickable("     aboutme.md\n", { page: 1 })
+                    .print("   executables/\n")
+                    .addClickable("     whitetext.exe\n", { themeColor: 0 })
+                    .addClickable("     greentext.exe\n", { themeColor: 1 })
+                    .addClickable("     lightmode.exe\n", { themeColor: 2 })
+                    .line(23, 0, 23, WebConsole.getHeight() - 1);
+
+                printMultilineAt(fileText, 1, 25, WebConsole);
+            })();
+        </script>
     </body>
 </html>
